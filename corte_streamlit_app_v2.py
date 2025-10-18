@@ -1,159 +1,133 @@
-import io
-import os
-import tempfile
 import streamlit as st
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from fpdf import FPDF
-from PIL import Image, ImageDraw
+import io
 
-# =========================================================
-# 🧮 FUNCIONES DE OPTIMIZACIÓN
-# =========================================================
+st.title("🪚 Optimizador de Corte Essenza")
+st.write("Optimiza el aprovechamiento de láminas de mármol o cuarzo minimizando el desperdicio.")
 
-def place_pieces_in_sheets(sheet_w, sheet_h, pieces, kerf):
-    """
-    Coloca las piezas dentro de una o más láminas (en metros).
-    El kerf solo se aplica entre cortes internos.
-    """
-    all_placements = []  # [(sheet_index, x, y, w, h)]
-    current_sheet = 1
-    free_rects = [(0, 0, sheet_w, sheet_h)]
-    used_area = 0
+# ------------------------------
+# Parámetros de entrada
+# ------------------------------
+sheet_w = st.number_input("Ancho de la lámina (m)", value=1.60, step=0.01, format="%.3f")
+sheet_h = st.number_input("Largo de la lámina (m)", value=2.40, step=0.01, format="%.3f")
+kerf = st.number_input("Espesor del disco de corte (kerf, m)", value=0.003, step=0.001, format="%.3f")
 
-    for p in pieces:
-        pw, ph, qty = p
-        for _ in range(qty):
-            placed = False
-            for i, (x, y, w, h) in enumerate(free_rects):
-                if pw <= w and ph <= h:
-                    all_placements.append((current_sheet, x, y, pw, ph))
-                    used_area += pw * ph
-                    del free_rects[i]
-                    free_rects += [
-                        (x + pw + kerf, y, w - pw - kerf, ph),
-                        (x, y + ph + kerf, w, h - ph - kerf)
-                    ]
-                    free_rects = [(fx, fy, fw, fh) for fx, fy, fw, fh in free_rects if fw > 0 and fh > 0]
-                    placed = True
-                    break
-            if not placed:
-                # Inicia una nueva lámina
-                current_sheet += 1
-                free_rects = [(0, 0, sheet_w, sheet_h)]
-                free_rects[0] = (0, 0, sheet_w, sheet_h)
-                free_rects.pop(0)
-                free_rects = [(0, 0, sheet_w, sheet_h)]
-                free_rects_copy = free_rects.copy()
-                free_rects = [(0, 0, sheet_w, sheet_h)]
-                free_rects = [(0, 0, sheet_w, sheet_h)]
-                all_placements.append((current_sheet, 0, 0, pw, ph))
-                used_area += pw * ph
-                free_rects = [(pw + kerf, 0, sheet_w - pw - kerf, ph),
-                              (0, ph + kerf, sheet_w, sheet_h - ph - kerf)]
-                placed = True
-    return all_placements, used_area, current_sheet
+st.subheader("Piezas (mesones) a cortar")
+n = st.number_input("Número de piezas diferentes", min_value=1, value=1, step=1)
 
+pieces = []
+for i in range(int(n)):
+    st.markdown(f"**Pieza {i+1}**")
+    w = st.number_input(f"Ancho pieza {i+1} (m)", value=0.5, step=0.01, format="%.3f")
+    h = st.number_input(f"Largo pieza {i+1} (m)", value=1.4, step=0.01, format="%.3f")
+    qty = st.number_input(f"Cantidad", min_value=1, value=6, step=1)
+    pieces.append({"width": w, "height": h, "qty": qty})
 
-# =========================================================
-# 🖼️ GENERAR GRÁFICO DE CADA LÁMINA
-# =========================================================
+# ------------------------------
+# Algoritmo de colocación simple (fila a fila)
+# ------------------------------
+placements = []
+num_sheets = 1
+x, y, max_row_h = 0, 0, 0
 
-def draw_sheet(sheet_w, sheet_h, placements, sheet_number):
-    img_w = 800
-    img_h = int(800 * (sheet_h / sheet_w))
-    img = Image.new("RGB", (img_w, img_h), "white")
-    draw = ImageDraw.Draw(img)
+for piece in pieces:
+    for _ in range(piece["qty"]):
+        w, h = piece["width"], piece["height"]
+        if w > sheet_w or h > sheet_h:
+            st.warning(f"No cabe la pieza {w:.3f} x {h:.3f} m en la lámina.")
+            continue
+        if x + w > sheet_w:
+            x = 0
+            y += max_row_h + kerf
+            max_row_h = 0
+        if y + h > sheet_h:
+            num_sheets += 1
+            x, y, max_row_h = 0, 0, 0
+        placements.append({"sheet": num_sheets, "x": x, "y": y, "w": w, "h": h})
+        x += w + kerf
+        max_row_h = max(max_row_h, h)
 
-    scale = img_w / sheet_w
-    for (s, x, y, w, h) in placements:
-        if s == sheet_number:
-            draw.rectangle(
-                [(x * scale, y * scale), ((x + w) * scale, (y + h) * scale)],
-                outline="black", width=2, fill="#A9CCE3"
-            )
-            draw.text((x * scale + 5, y * scale + 5), f"{w:.3f}x{h:.3f} m", fill="black")
+# ------------------------------
+# Cálculo de aprovechamiento
+# ------------------------------
+total_area = sheet_w * sheet_h * num_sheets
+used_area = sum(p["w"] * p["h"] for p in placements)
+usage = (used_area / total_area * 100) if total_area > 0 else 0
+waste = 100 - usage
 
-    return img
+st.write(f"**Aprovechamiento del material: {usage:.2f}%**")
+st.write(f"**Desperdicio: {waste:.2f}%**")
 
+# ------------------------------
+# Gráficos
+# ------------------------------
+def plot_sheet(sheet_num):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_xlim(0, sheet_w)
+    ax.set_ylim(0, sheet_h)
+    ax.set_aspect("equal")
+    ax.set_title(f"Lámina {sheet_num}")
 
-# =========================================================
-# 📄 GENERAR PDF
-# =========================================================
+    # Fondo gris claro = área total
+    ax.add_patch(patches.Rectangle((0, 0), sheet_w, sheet_h, facecolor="#e0e0e0"))
 
-def generate_pdf(sheet_w, sheet_h, placements, num_sheets, usage):
+    # Dibujar piezas
+    for p in placements:
+        if p["sheet"] == sheet_num:
+            rect = patches.Rectangle((p["x"], p["y"]), p["w"], p["h"],
+                                     linewidth=1, edgecolor='blue', facecolor='skyblue', alpha=0.8)
+            ax.add_patch(rect)
+            cx = p["x"] + p["w"]/2
+            cy = p["y"] + p["h"]/2
+            ax.text(cx, cy, f"{p['w']:.3f}×{p['h']:.3f}", ha='center', va='center', fontsize=8)
+
+    # Texto de aprovechamiento y desperdicio
+    ax.text(sheet_w * 0.98, sheet_h * 0.98,
+            f"Aprovechamiento: {usage:.2f}%\nDesperdicio: {waste:.2f}%",
+            ha='right', va='top', fontsize=10, color='black',
+            bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray'))
+
+    ax.set_xlabel("m")
+    ax.set_ylabel("m")
+    st.pyplot(fig)
+    return fig
+
+for s in range(1, num_sheets + 1):
+    plot_sheet(s)
+
+# ------------------------------
+# Generar PDF
+# ------------------------------
+def generate_pdf(sheet_w, sheet_h, placements, num_sheets, usage, waste):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
     for s in range(1, num_sheets + 1):
         pdf.add_page()
         pdf.set_font("Arial", "B", 14)
-        pdf.cell(200, 10, txt=f"Optimizador de Corte Essenza - Lámina {s}", ln=True, align="C")
+        pdf.cell(0, 10, f"Optimización de Corte - Lámina {s}", ln=True, align="C")
+        pdf.set_font("Arial", size=11)
+        pdf.cell(0, 10, f"Aprovechamiento: {usage:.2f}% | Desperdicio: {waste:.2f}%", ln=True)
 
-        pdf.set_font("Arial", size=10)
-        pdf.cell(200, 10, txt=f"Lámina: {sheet_w:.3f} x {sheet_h:.3f} m", ln=True)
-        pdf.cell(200, 10, txt=f"Aprovechamiento total: {usage:.2f}%", ln=True)
-
-        img = draw_sheet(sheet_w, sheet_h, placements, s)
+        fig = plot_sheet(s)
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
         buf.seek(0)
+        pdf.image(buf, x=15, w=180)
 
-        # Guardar imagen temporalmente
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-            tmp_file.write(buf.getvalue())
-            tmp_path = tmp_file.name
+    return pdf.output(dest="S").encode("latin1")
 
-        pdf.image(tmp_path, x=15, y=None, w=180)
-        os.remove(tmp_path)
-
-    pdf_output = io.BytesIO()
-    pdf.output(pdf_output)
-    pdf_output.seek(0)
-    return pdf_output
-
-
-# =========================================================
-# 🖥️ INTERFAZ STREAMLIT
-# =========================================================
-
-st.title("🪚 Optimizador de Corte Essenza")
-st.write("Optimiza el aprovechamiento de láminas de mármol o cuarzo minimizando el desperdicio (en metros).")
-
-sheet_w = st.number_input("Ancho de la lámina (m)", min_value=0.1, max_value=10.0, value=1.600, step=0.1)
-sheet_h = st.number_input("Largo de la lámina (m)", min_value=0.1, max_value=10.0, value=2.400, step=0.1)
-kerf = st.number_input("Espesor del disco de corte (kerf, mm)", min_value=0.0, max_value=10.0, value=3.0, step=0.1)
-kerf_m = kerf / 1000.0
-
-st.subheader("Piezas (mesones) a cortar")
-num_pieces = st.number_input("Número de piezas diferentes", min_value=1, max_value=20, value=1)
-
-pieces = []
-for i in range(num_pieces):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        w = st.number_input(f"Ancho pieza {i+1} (m)", min_value=0.1, max_value=10.0, value=0.500, step=0.1, format="%.3f")
-    with col2:
-        h = st.number_input(f"Largo pieza {i+1} (m)", min_value=0.1, max_value=10.0, value=1.400, step=0.1, format="%.3f")
-    with col3:
-        qty = st.number_input(f"Cantidad", min_value=1, max_value=20, value=6)
-    pieces.append((w, h, qty))
-
-if st.button("🧠 Optimizar corte"):
-    placements, used_area, num_sheets = place_pieces_in_sheets(sheet_w, sheet_h, pieces, kerf_m)
-    total_area = sheet_w * sheet_h * num_sheets
-    usage = (used_area / total_area) * 100 if total_area > 0 else 0
-
-    st.success(f"✅ Aprovechamiento del material: {usage:.2f}% usando {num_sheets} lámina(s).")
-
-    # Mostrar gráfico de cada lámina
-    for s in range(1, num_sheets + 1):
-        img = draw_sheet(sheet_w, sheet_h, placements, s)
-        st.image(img, caption=f"Lámina {s}", use_container_width=True)
-
-    pdf_bytes = generate_pdf(sheet_w, sheet_h, placements, num_sheets, usage)
-
+# ------------------------------
+# Botón de descarga PDF
+# ------------------------------
+if st.button("📄 Exportar reporte PDF"):
+    pdf_bytes = generate_pdf(sheet_w, sheet_h, placements, num_sheets, usage, waste)
     st.download_button(
-        label="📥 Descargar reporte en PDF",
+        label="Descargar reporte PDF",
         data=pdf_bytes,
-        file_name="reporte_corte_essenza.pdf",
+        file_name="reporte_optimizacion_corte.pdf",
         mime="application/pdf"
     )
