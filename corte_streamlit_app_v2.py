@@ -5,7 +5,7 @@ import tempfile
 from fpdf import FPDF
 
 # ==============================
-# 🧩 ALGORITMO MAXRECTS
+# 🧩 ALGORITMO MAXRECTS (MEJORADO)
 # ==============================
 class MaxRectsBin:
     def __init__(self, width, height, kerf=0):
@@ -16,22 +16,40 @@ class MaxRectsBin:
         self.placements = []
 
     def insert(self, w, h):
-        """Inserta un rectángulo (pieza) en el espacio libre disponible."""
-        for i, (x, y, fw, fh) in enumerate(self.free_rects):
-            # Aplica kerf solo si hay espacio interno, no en bordes
-            if w + (self.kerf if x + w < self.width else 0) <= fw and \
-               h + (self.kerf if y + h < self.height else 0) <= fh:
-                self.placements.append((x, y, w, h, i))
-                # Cortes internos (no en bordes)
-                kerf_x = self.kerf if x + w < self.width else 0
-                kerf_y = self.kerf if y + h < self.height else 0
+        """Inserta una pieza usando heurística Best Short Side Fit"""
+        best_score = None
+        best_rect = None
+        best_index = -1
 
-                # Actualizar rectángulos libres
-                del self.free_rects[i]
-                self.free_rects.append((x + w + kerf_x, y, fw - w - kerf_x, h))
-                self.free_rects.append((x, y + h + kerf_y, fw, fh - h - kerf_y))
-                return True
+        for i, (fx, fy, fw, fh) in enumerate(self.free_rects):
+            if w <= fw and h <= fh:
+                score = min(fw - w, fh - h)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_rect = (fx, fy, w, h)
+                    best_index = i
+
+        if best_rect:
+            fx, fy, w, h = best_rect
+            self.place_rect(fx, fy, w, h, best_index)
+            return True
         return False
+
+    def place_rect(self, x, y, w, h, free_index):
+        """Divide el área libre y actualiza cortes"""
+        (fx, fy, fw, fh) = self.free_rects[free_index]
+        del self.free_rects[free_index]
+
+        kerf_x = self.kerf if x + w < self.width else 0
+        kerf_y = self.kerf if y + h < self.height else 0
+
+        if fw - w - kerf_x > 0:
+            self.free_rects.append((x + w + kerf_x, fy, fw - w - kerf_x, h))
+        if fh - h - kerf_y > 0:
+            self.free_rects.append((fx, fy + h + kerf_y, fw, fh - h - kerf_y))
+
+        self.placements.append((x, y, w, h, free_index))
+
 
 # ==============================
 # 📄 FUNCIÓN PDF
@@ -71,14 +89,13 @@ def generate_pdf(sheet_w, sheet_h, placements, pieces, usage):
         tmp_path = tmp_file.name
 
     pdf.image(tmp_path, x=15, w=180)
-
     pdf.ln(10)
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 8, "Detalle de piezas cortadas:", ln=True)
     pdf.set_font("Helvetica", "", 10)
     pdf.set_fill_color(230, 230, 230)
     pdf.cell(40, 8, "Ancho (mm)", 1, 0, "C", fill=True)
-    pdf.cell(40, 8, "Alto (mm)", 1, 0, "C", fill=True)
+    pdf.cell(40, 8, "Largo (mm)", 1, 0, "C", fill=True)
     pdf.cell(40, 8, "Área (mm²)", 1, 1, "C", fill=True)
 
     for _, _, w, h, _ in placements:
@@ -86,11 +103,9 @@ def generate_pdf(sheet_w, sheet_h, placements, pieces, usage):
         pdf.cell(40, 8, str(int(h)), 1, 0, "C")
         pdf.cell(40, 8, f"{int(w*h)}", 1, 1, "C")
 
-    pdf_output = BytesIO()
-    pdf.output(pdf_output)
-    pdf_bytes = pdf_output.getvalue()
-
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')
     return pdf_bytes
+
 
 # ==============================
 # 🎨 INTERFAZ STREAMLIT
@@ -101,22 +116,22 @@ st.markdown("Optimiza el aprovechamiento de láminas de mármol o cuarzo minimiz
 
 col1, col2 = st.columns(2)
 with col1:
-    sheet_w = st.number_input("Ancho de la lámina (mm)", value=3000)
-    sheet_h = st.number_input("Largo de la lámina (mm)", value=2000)
+    sheet_w = st.number_input("Ancho de la lámina (mm)", value=1600)
+    sheet_h = st.number_input("Largo de la lámina (mm)", value=2400)
     kerf = st.number_input("Espesor del disco de corte (kerf, mm)", value=3.0)
 
 with col2:
     st.markdown("### Piezas (mesones) a cortar")
     pieces = []
-    n = st.number_input("Número de piezas diferentes", min_value=1, value=3, step=1)
+    n = st.number_input("Número de piezas diferentes", min_value=1, value=1, step=1)
     for i in range(int(n)):
         c1, c2, c3 = st.columns(3)
         with c1:
-            w = st.number_input(f"Ancho pieza {i+1} (mm)", min_value=1.0, value=600.0, key=f"w{i}")
+            w = st.number_input(f"Ancho pieza {i+1} (mm)", min_value=1.0, value=500.0, key=f"w{i}")
         with c2:
-            h = st.number_input(f"Largo pieza {i+1} (mm)", min_value=1.0, value=500.0, key=f"h{i}")
+            h = st.number_input(f"Largo pieza {i+1} (mm)", min_value=1.0, value=1400.0, key=f"h{i}")
         with c3:
-            qty = st.number_input(f"Cantidad", min_value=1, value=2, key=f"q{i}")
+            qty = st.number_input(f"Cantidad", min_value=1, value=6, key=f"q{i}")
         for _ in range(qty):
             pieces.append((w, h))
 
@@ -125,17 +140,16 @@ if st.button("Calcular corte óptimo"):
     placements = []
     for w, h in pieces:
         if not bin.insert(w, h):
-            # Intentar rotar 90°
-            if not bin.insert(h, w):
+            if not bin.insert(h, w):  # intenta rotar
                 st.warning(f"No cabe la pieza {w}x{h} mm en la lámina.")
-        else:
-            placements = bin.placements
+    placements = bin.placements
 
     used_area = sum(w * h for _, _, w, h, _ in placements)
     total_area = sheet_w * sheet_h
     usage = (used_area / total_area) * 100
 
     st.success(f"Aprovechamiento del material: **{usage:.2f}%**")
+
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.set_xlim(0, sheet_w)
     ax.set_ylim(0, sheet_h)
