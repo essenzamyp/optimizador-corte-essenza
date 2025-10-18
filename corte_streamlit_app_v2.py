@@ -251,7 +251,7 @@ with col2:
 
 # tabla simple de entrada
 if "rows" not in st.session_state:
-    st.session_state.rows = [{"id":1,"w":1.2,"h":0.6,"q":3}]
+    st.session_state.rows = [{"id":1,"w":0.6,"h":1.4,"q":3}]
 
 def add_row():
     cur = st.session_state.rows
@@ -268,7 +268,7 @@ for i, r in enumerate(rows):
     idv = c1.number_input(f"ID {i+1}", value=r["id"], key=f"id_{i}")
     wv = c2.number_input(f"Ancho (m) {i+1}", value=float(r["w"]), format="%.3f", step=0.01, key=f"w_{i}")
     hv = c3.number_input(f"Largo (m) {i+1}", value=float(r["h"]), format="%.3f", step=0.01, key=f"h_{i}")
-    qv = c4.number_input(f"Qty {i+1}", value=int(r["q"]), min_value=1, step=1, key=f"q_{i}")
+    qv = c4.number_input(f"Cantidad {i+1}", value=int(r["q"]), min_value=1, step=1, key=f"q_{i}")
     new_rows.append({"id":int(idv), "w":float(wv), "h":float(hv), "q":int(qv)})
 st.session_state.rows = new_rows
 
@@ -297,3 +297,4 @@ if st.button("Calcular corte (MaxRects)"):
         st.error(str(e))
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
+
